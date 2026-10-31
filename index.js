@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 
 dotenv.config();
 
@@ -80,6 +80,58 @@ app.get("/books", async (req, res) => {
       success: false,
       message: "Failed to fetch books",
     });
+  }
+});
+
+// Get a single book by ID
+app.get("/books/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID",
+      });
+    }
+
+    const book = await booksCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!book) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: book,
+    });
+  } catch (err) {
+    console.error("Failed to fetch book:", err.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch book",
+    });
+  }
+});
+
+// Add a new book
+app.post("/books", async (req, res) => {
+  try {
+    const book = req.body;
+    book.createdAt = new Date();
+    book.availableCopies = Number(book.totalCopies);
+
+    const result = await booksCollection.insertOne(book);
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to add book" });
   }
 });
 
