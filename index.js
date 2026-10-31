@@ -210,6 +210,30 @@ app.get("/borrows", async (req, res) => {
   }
 });
 
+// Return a borrowed book
+app.delete("/borrows/:id", async (req, res) => {
+  try {
+    const id = new ObjectId(req.params.id);
+
+    const borrow = await borrowsCollection.findOne({ _id: id });
+
+    if (!borrow) {
+      return res.status(404).send({ message: "Borrow record not found" });
+    }
+
+    await booksCollection.updateOne(
+      { _id: new ObjectId(borrow.bookId) },
+      { $inc: { availableCopies: 1 } }
+    );
+
+    const result = await borrowsCollection.deleteOne({ _id: id });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to return book" });
+  }
+});
+
 // Start server
 async function startServer() {
   try {
