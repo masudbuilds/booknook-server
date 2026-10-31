@@ -195,6 +195,21 @@ app.post("/borrows", async (req, res) => {
   }
 });
 
+// Get borrowed books
+app.get("/borrows", async (req, res) => {
+  try {
+    const email = req.query.email;
+
+    const borrows = await borrowsCollection
+      .find({ userEmail: email })
+      .toArray();
+
+    res.send(borrows);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to fetch borrowed books" });
+  }
+});
+
 // Start server
 async function startServer() {
   try {
