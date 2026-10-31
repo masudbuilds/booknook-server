@@ -167,6 +167,34 @@ app.delete("/books/:id", async (req, res) => {
   }
 });
 
+
+// Borrow a book
+app.post("/borrows", async (req, res) => {
+  try {
+    const borrow = req.body;
+    const bookId = new ObjectId(borrow.bookId);
+
+    const result = await booksCollection.updateOne(
+      { _id: bookId, availableCopies: { $gt: 0 } },
+      { $inc: { availableCopies: -1 } }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(400).send({
+        message: "Book is not available",
+      });
+    }
+
+    borrow.borrowDate = new Date();
+
+    const borrowResult = await borrowsCollection.insertOne(borrow);
+
+    res.send(borrowResult);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to borrow book" });
+  }
+});
+
 // Start server
 async function startServer() {
   try {
