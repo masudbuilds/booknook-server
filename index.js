@@ -135,6 +135,38 @@ app.post("/books", async (req, res) => {
   }
 });
 
+// Update a book
+app.patch("/books/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedBook = req.body;
+
+    const result = await booksCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedBook }
+    );
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to update book" });
+  }
+});
+
+// Delete a book
+app.delete("/books/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const result = await booksCollection.deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to delete book" });
+  }
+});
+
 // Start server
 async function startServer() {
   try {
