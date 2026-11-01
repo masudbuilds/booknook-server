@@ -2,6 +2,10 @@
 
 RESTful backend service powering the BookNook community library platform. Built with Node.js, Express.js ES modules, and MongoDB, featuring token-based authentication via JWT, atomic inventory management, and strict access control.
 
+- **Live Backend API:** [https://booknook-server-rho.vercel.app/](https://booknook-server-rho.vercel.app/)
+- **Live Client Application:** [https://booknook-client-roan.vercel.app/](https://booknook-client-roan.vercel.app/)
+- **Client Repository:** [booknook-client](../booknook-client)
+
 ---
 
 ## Technologies
@@ -36,18 +40,20 @@ Create a `.env` file in the root directory (you can copy `.env.example`):
 cp .env.example .env
 ```
 
-| Variable | Description | Default / Example |
+| Variable | Description | Production Value / Example |
 | :--- | :--- | :--- |
 | `PORT` | Port the API server listens on | `5000` |
-| `CLIENT_URL` | Allowed origin(s) for CORS (comma-separated for multiple) | `http://localhost:3000` |
+| `CLIENT_URL` | Allowed origin(s) for CORS (comma-separated) | `http://localhost:3000,https://booknook-client-roan.vercel.app` |
 | `JWT_SECRET` | Shared secret key for verifying JWTs (must match client) | `your_shared_jwt_secret` |
-| `MONGODB_URI` | MongoDB connection string | `mongodb+srv://...` |
+| `MONGODB_URI` | MongoDB connection string (Atlas or local) | `mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority` |
 | `MONGODB_DB_NAME` | MongoDB database name | `booknook` |
+
+> **CORS Configuration:** `index.js` splits `CLIENT_URL` by commas and strips trailing slashes, allowing simultaneous local testing (`http://localhost:3000`) and production traffic from the deployed Vercel frontend (`https://booknook-client-roan.vercel.app`).
 
 ### 3. Run Locally
 
 ```bash
-# Start with auto-restart on changes
+# Start with auto-restart on file changes
 npm run dev
 
 # Or start in standard mode
@@ -208,11 +214,11 @@ The repository includes a [vercel.json](vercel.json) configuration for running a
 }
 ```
 
+### Steps to Deploy:
 1. Import the repository into [Vercel](https://vercel.com).
 2. Configure the environment variables in Vercel Project Settings:
-   - `CLIENT_URL`: URL of the deployed frontend (e.g. `https://booknook-client.vercel.app`).
+   - `CLIENT_URL`: `http://localhost:3000,https://booknook-client-roan.vercel.app`
    - `JWT_SECRET`: Must match the client application's `JWT_SECRET`.
-   - `MONGODB_URI`: MongoDB Atlas connection URI with whitelist access for Vercel IPs (`0.0.0.0/0`).
-   - `MONGODB_DB_NAME`: Database name (`booknook`).
+   - `MONGODB_URI`: MongoDB Atlas connection URI with IP whitelist enabled (`0.0.0.0/0`).
+   - `MONGODB_DB_NAME`: `booknook`
 3. Deploy.
-
