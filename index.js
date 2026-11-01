@@ -22,7 +22,7 @@ async function connectToMongoDB() {
     await client.connect();
     console.log("You successfully connected to MongoDB!");
 
-    const db = client.db("booknook");
+    const db = client.db(process.env.MONGODB_DB_NAME || "booknook");
     booksCollection = db.collection("books");
     borrowsCollection = db.collection("borrows");
 
@@ -34,10 +34,21 @@ async function connectToMongoDB() {
   }
 }
 
-// Middleware
+// Middleware & CORS configuration
+const allowedOrigins = process.env.CLIENT_URL
+  ? process.env.CLIENT_URL.split(",").map((url) => url.trim().replace(/\/$/, ""))
+  : ["http://localhost:3000"];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
   })
 );
 
@@ -186,6 +197,31 @@ app.patch("/books/:id", verifyToken, async (req, res) => {
     }
 
     const updatedBook = req.body;
+
+    if (updatedBook.totalCopies !== undefined) {
+      const newTotal = Number(updatedBook.totalCopies);
+      if (isNaN(newTotal) || newTotal < 1) {
+        return res.status(400).send({ message: "Total copies must be at least 1" });
+      }
+
+      const currentTotal = Number(existingBook.totalCopies) || 0;
+      const currentAvailable = Number(existingBook.availableCopies) || 0;
+      const currentlyBorrowed = Math.max(0, currentTotal - currentAvailable);
+
+      if (newTotal < currentlyBorrowed) {
+        return res.status(400).send({
+          message: `Total copies cannot be less than currently borrowed copies (${currentlyBorrowed})`,
+        });
+      }
+
+      updatedBook.totalCopies = newTotal;
+      updatedBook.availableCopies = newTotal - currentlyBorrowed;
+    }
+
+    delete updatedBook.userEmail;
+    delete updatedBook.userName;
+    delete updatedBook._id;
+
     const result = await booksCollection.updateOne(
       { _id: new ObjectId(id) },
       { $set: updatedBook }
@@ -215,6 +251,13 @@ app.delete("/books/:id", verifyToken, async (req, res) => {
       return res.status(403).send({ message: "Forbidden" });
     }
 
+    const activeBorrow = await borrowsCollection.findOne({ bookId: id });
+    if (activeBorrow) {
+      return res.status(400).send({
+        message: "Cannot delete this book because it is currently borrowed by a library member",
+      });
+    }
+
     const result = await booksCollection.deleteOne({
       _id: new ObjectId(id),
     });
@@ -228,40 +271,91 @@ app.delete("/books/:id", verifyToken, async (req, res) => {
 // Borrow a book
 app.post("/borrows", verifyToken, async (req, res) => {
   try {
-    const borrow = req.body;
+    const { bookId, returnDate, borrowDate } = req.body;
 
-    if (!borrow.bookId || !ObjectId.isValid(borrow.bookId)) {
+    if (!bookId || !ObjectId.isValid(bookId)) {
       return res.status(400).send({ message: "Valid bookId is required" });
     }
 
+    if (!returnDate) {
+      return res.status(400).send({ message: "Return date is required" });
+    }
+
+    const bookObjectId = new ObjectId(bookId);
+    const book = await booksCollection.findOne({ _id: bookObjectId });
+    if (!book) {
+      return res.status(404).send({ message: "Book not found" });
+    }
+
+    if (!book.availableCopies || Number(book.availableCopies) < 1) {
+      return res.status(400).send({ message: "Book is not available" });
+    }
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    const effectiveBorrowDate = borrowDate || todayStr;
+
+    const borrowTime = new Date(effectiveBorrowDate).getTime();
+    const returnTime = new Date(returnDate).getTime();
+
+    if (isNaN(borrowTime) || isNaN(returnTime)) {
+      return res.status(400).send({ message: "Invalid date format" });
+    }
+
+    if (returnTime <= borrowTime) {
+      return res.status(400).send({ message: "Return date must be later than borrow date" });
+    }
+
     const existingBorrow = await borrowsCollection.findOne({
-      bookId: borrow.bookId,
+      bookId: bookId,
       userEmail: req.user.email,
     });
 
     if (existingBorrow) {
-      return res.status(400).send({ message: "You have already borrowed this book" });
+      return res.status(400).send({
+        message: "You have already borrowed this book and have not returned it yet.",
+      });
     }
 
-    const bookId = new ObjectId(borrow.bookId);
-    const result = await booksCollection.updateOne(
-      { _id: bookId, availableCopies: { $gt: 0 } },
+    const updateResult = await booksCollection.updateOne(
+      { _id: bookObjectId, availableCopies: { $gt: 0 } },
       { $inc: { availableCopies: -1 } }
     );
 
-    if (result.modifiedCount === 0) {
+    if (updateResult.modifiedCount === 0) {
       return res.status(400).send({
         message: "Book is not available",
       });
     }
 
-    borrow.userEmail = req.user.email;
-    borrow.userName = req.user.name;
-    borrow.borrowDate = new Date();
+    const borrowRecord = {
+      bookId: bookId,
+      bookTitle: book.title,
+      bookImage: book.image,
+      userEmail: req.user.email,
+      userName: req.user.name || "Library Member",
+      borrowDate: effectiveBorrowDate,
+      returnDate: returnDate,
+      createdAt: new Date(),
+    };
 
-    const borrowResult = await borrowsCollection.insertOne(borrow);
-    res.send(borrowResult);
+    try {
+      const borrowResult = await borrowsCollection.insertOne(borrowRecord);
+      res.status(201).send({
+        success: true,
+        message: "Book borrowed successfully",
+        insertedId: borrowResult.insertedId,
+        data: borrowRecord,
+      });
+    } catch (insertError) {
+      // Roll back inventory decrement if borrowing record insertion fails
+      await booksCollection.updateOne(
+        { _id: bookObjectId },
+        { $inc: { availableCopies: 1 } }
+      );
+      throw insertError;
+    }
   } catch (error) {
+    console.error("Failed to borrow book:", error);
     res.status(500).send({ message: "Failed to borrow book" });
   }
 });
@@ -271,6 +365,7 @@ app.get("/borrows", verifyToken, async (req, res) => {
   try {
     const borrows = await borrowsCollection
       .find({ userEmail: req.user.email })
+      .sort({ createdAt: -1 })
       .toArray();
 
     res.send(borrows);
@@ -282,9 +377,13 @@ app.get("/borrows", verifyToken, async (req, res) => {
 // Return a borrowed book
 app.delete("/borrows/:id", verifyToken, async (req, res) => {
   try {
-    const id = new ObjectId(req.params.id);
+    const { id } = req.params;
 
-    const borrow = await borrowsCollection.findOne({ _id: id });
+    if (!id || !ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid borrowing record ID" });
+    }
+
+    const borrow = await borrowsCollection.findOne({ _id: new ObjectId(id) });
     if (!borrow) {
       return res.status(404).send({ message: "Borrow record not found" });
     }
@@ -293,14 +392,24 @@ app.delete("/borrows/:id", verifyToken, async (req, res) => {
       return res.status(403).send({ message: "Forbidden" });
     }
 
-    await booksCollection.updateOne(
-      { _id: new ObjectId(borrow.bookId) },
-      { $inc: { availableCopies: 1 } }
-    );
+    const deleteResult = await borrowsCollection.deleteOne({ _id: new ObjectId(id) });
 
-    const result = await borrowsCollection.deleteOne({ _id: id });
-    res.send(result);
+    if (deleteResult.deletedCount > 0) {
+      if (borrow.bookId && ObjectId.isValid(borrow.bookId)) {
+        await booksCollection.updateOne(
+          { _id: new ObjectId(borrow.bookId) },
+          { $inc: { availableCopies: 1 } }
+        );
+      }
+    }
+
+    res.send({
+      success: true,
+      message: "Book returned successfully",
+      deletedCount: deleteResult.deletedCount,
+    });
   } catch (error) {
+    console.error("Failed to return book:", error);
     res.status(500).send({ message: "Failed to return book" });
   }
 });
@@ -318,7 +427,7 @@ async function startServer() {
   }
 }
 
-if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+if (!process.env.VERCEL) {
   startServer();
 }
 
