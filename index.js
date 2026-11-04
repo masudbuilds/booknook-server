@@ -20,13 +20,10 @@ async function connectToMongoDB() {
   if (booksCollection && borrowsCollection) return client;
   try {
     await client.connect();
-    console.log("You successfully connected to MongoDB!");
-
     const db = client.db(process.env.MONGODB_DB_NAME || "booknook");
     booksCollection = db.collection("books");
     borrowsCollection = db.collection("borrows");
-
-    console.log("MongoDB collections are ready!");
+    console.log("Connected to MongoDB");
     return client;
   } catch (err) {
     console.error("MongoDB connection failed:", err.message);
@@ -34,24 +31,8 @@ async function connectToMongoDB() {
   }
 }
 
-// Middleware & CORS configuration
-const allowedOrigins = process.env.CLIENT_URL
-  ? process.env.CLIENT_URL.split(",").map((url) => url.trim().replace(/\/$/, ""))
-  : ["http://localhost:3000"];
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes("*")) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
-  })
-);
-
+// Middleware
+app.use(cors());
 app.use(express.json());
 
 // Ensure database connection middleware
@@ -59,7 +40,7 @@ app.use(async (req, res, next) => {
   if (!booksCollection || !borrowsCollection) {
     try {
       await connectToMongoDB();
-    } catch (err) {
+    } catch {
       return res.status(500).send({ message: "Failed to connect to database" });
     }
   }
@@ -77,25 +58,19 @@ function verifyToken(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).send({ message: "Unauthorized access" });
   }
 }
 
 // Home route
 app.get("/", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "BookNook API is running!",
-  });
+  res.send({ message: "BookNook API is running!" });
 });
 
 // Health check
 app.get("/health", (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Server is healthy",
-  });
+  res.send({ status: "ok" });
 });
 
 // Get all books
@@ -110,18 +85,9 @@ app.get("/books", async (req, res) => {
     }
 
     const books = await query.toArray();
-
-    res.status(200).json({
-      success: true,
-      count: books.length,
-      data: books,
-    });
+    res.send(books);
   } catch (err) {
-    console.error("Failed to fetch books:", err.message);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch books",
-    });
+    res.status(500).send({ message: "Failed to fetch books" });
   }
 });
 
@@ -129,35 +95,18 @@ app.get("/books", async (req, res) => {
 app.get("/books/:id", async (req, res) => {
   try {
     const { id } = req.params;
-
     if (!ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid book ID",
-      });
+      return res.status(400).send({ message: "Invalid book ID" });
     }
 
-    const book = await booksCollection.findOne({
-      _id: new ObjectId(id),
-    });
-
+    const book = await booksCollection.findOne({ _id: new ObjectId(id) });
     if (!book) {
-      return res.status(404).json({
-        success: false,
-        message: "Book not found",
-      });
+      return res.status(404).send({ message: "Book not found" });
     }
 
-    res.status(200).json({
-      success: true,
-      data: book,
-    });
+    res.send(book);
   } catch (err) {
-    console.error("Failed to fetch book:", err.message);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch book",
-    });
+    res.status(500).send({ message: "Failed to fetch book" });
   }
 });
 
@@ -182,7 +131,6 @@ app.post("/books", verifyToken, async (req, res) => {
 app.patch("/books/:id", verifyToken, async (req, res) => {
   try {
     const id = req.params.id;
-
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ message: "Invalid book ID" });
     }
@@ -197,30 +145,16 @@ app.patch("/books/:id", verifyToken, async (req, res) => {
     }
 
     const updatedBook = req.body;
+    delete updatedBook._id;
+    delete updatedBook.userEmail;
 
     if (updatedBook.totalCopies !== undefined) {
-      const newTotal = Number(updatedBook.totalCopies);
-      if (isNaN(newTotal) || newTotal < 1) {
-        return res.status(400).send({ message: "Total copies must be at least 1" });
-      }
-
       const currentTotal = Number(existingBook.totalCopies) || 0;
       const currentAvailable = Number(existingBook.availableCopies) || 0;
-      const currentlyBorrowed = Math.max(0, currentTotal - currentAvailable);
-
-      if (newTotal < currentlyBorrowed) {
-        return res.status(400).send({
-          message: `Total copies cannot be less than currently borrowed copies (${currentlyBorrowed})`,
-        });
-      }
-
-      updatedBook.totalCopies = newTotal;
-      updatedBook.availableCopies = newTotal - currentlyBorrowed;
+      const borrowed = Math.max(0, currentTotal - currentAvailable);
+      updatedBook.totalCopies = Number(updatedBook.totalCopies);
+      updatedBook.availableCopies = Math.max(0, updatedBook.totalCopies - borrowed);
     }
-
-    delete updatedBook.userEmail;
-    delete updatedBook.userName;
-    delete updatedBook._id;
 
     const result = await booksCollection.updateOne(
       { _id: new ObjectId(id) },
@@ -237,7 +171,6 @@ app.patch("/books/:id", verifyToken, async (req, res) => {
 app.delete("/books/:id", verifyToken, async (req, res) => {
   try {
     const id = req.params.id;
-
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({ message: "Invalid book ID" });
     }
@@ -251,17 +184,7 @@ app.delete("/books/:id", verifyToken, async (req, res) => {
       return res.status(403).send({ message: "Forbidden" });
     }
 
-    const activeBorrow = await borrowsCollection.findOne({ bookId: id });
-    if (activeBorrow) {
-      return res.status(400).send({
-        message: "Cannot delete this book because it is currently borrowed by a library member",
-      });
-    }
-
-    const result = await booksCollection.deleteOne({
-      _id: new ObjectId(id),
-    });
-
+    const result = await booksCollection.deleteOne({ _id: new ObjectId(id) });
     res.send(result);
   } catch (error) {
     res.status(500).send({ message: "Failed to delete book" });
@@ -271,91 +194,38 @@ app.delete("/books/:id", verifyToken, async (req, res) => {
 // Borrow a book
 app.post("/borrows", verifyToken, async (req, res) => {
   try {
-    const { bookId, returnDate, borrowDate } = req.body;
-
-    if (!bookId || !ObjectId.isValid(bookId)) {
+    const borrow = req.body;
+    if (!borrow.bookId || !ObjectId.isValid(borrow.bookId)) {
       return res.status(400).send({ message: "Valid bookId is required" });
     }
 
-    if (!returnDate) {
-      return res.status(400).send({ message: "Return date is required" });
-    }
-
-    const bookObjectId = new ObjectId(bookId);
-    const book = await booksCollection.findOne({ _id: bookObjectId });
-    if (!book) {
-      return res.status(404).send({ message: "Book not found" });
-    }
-
-    if (!book.availableCopies || Number(book.availableCopies) < 1) {
-      return res.status(400).send({ message: "Book is not available" });
-    }
-
-    const todayStr = new Date().toISOString().split("T")[0];
-    const effectiveBorrowDate = borrowDate || todayStr;
-
-    const borrowTime = new Date(effectiveBorrowDate).getTime();
-    const returnTime = new Date(returnDate).getTime();
-
-    if (isNaN(borrowTime) || isNaN(returnTime)) {
-      return res.status(400).send({ message: "Invalid date format" });
-    }
-
-    if (returnTime <= borrowTime) {
-      return res.status(400).send({ message: "Return date must be later than borrow date" });
-    }
-
     const existingBorrow = await borrowsCollection.findOne({
-      bookId: bookId,
+      bookId: borrow.bookId,
       userEmail: req.user.email,
     });
 
     if (existingBorrow) {
-      return res.status(400).send({
-        message: "You have already borrowed this book and have not returned it yet.",
-      });
+      return res.status(400).send({ message: "You have already borrowed this book" });
     }
 
-    const updateResult = await booksCollection.updateOne(
-      { _id: bookObjectId, availableCopies: { $gt: 0 } },
+    const bookId = new ObjectId(borrow.bookId);
+    const result = await booksCollection.updateOne(
+      { _id: bookId, availableCopies: { $gt: 0 } },
       { $inc: { availableCopies: -1 } }
     );
 
-    if (updateResult.modifiedCount === 0) {
-      return res.status(400).send({
-        message: "Book is not available",
-      });
+    if (result.modifiedCount === 0) {
+      return res.status(400).send({ message: "Book is not available" });
     }
 
-    const borrowRecord = {
-      bookId: bookId,
-      bookTitle: book.title,
-      bookImage: book.image,
-      userEmail: req.user.email,
-      userName: req.user.name || "Library Member",
-      borrowDate: effectiveBorrowDate,
-      returnDate: returnDate,
-      createdAt: new Date(),
-    };
+    borrow.userEmail = req.user.email;
+    borrow.userName = req.user.name;
+    borrow.borrowDate = borrow.borrowDate || new Date().toISOString().split("T")[0];
+    borrow.createdAt = new Date();
 
-    try {
-      const borrowResult = await borrowsCollection.insertOne(borrowRecord);
-      res.status(201).send({
-        success: true,
-        message: "Book borrowed successfully",
-        insertedId: borrowResult.insertedId,
-        data: borrowRecord,
-      });
-    } catch (insertError) {
-      // Roll back inventory decrement if borrowing record insertion fails
-      await booksCollection.updateOne(
-        { _id: bookObjectId },
-        { $inc: { availableCopies: 1 } }
-      );
-      throw insertError;
-    }
+    const borrowResult = await borrowsCollection.insertOne(borrow);
+    res.send(borrowResult);
   } catch (error) {
-    console.error("Failed to borrow book:", error);
     res.status(500).send({ message: "Failed to borrow book" });
   }
 });
@@ -377,10 +247,9 @@ app.get("/borrows", verifyToken, async (req, res) => {
 // Return a borrowed book
 app.delete("/borrows/:id", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-
-    if (!id || !ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid borrowing record ID" });
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid ID" });
     }
 
     const borrow = await borrowsCollection.findOne({ _id: new ObjectId(id) });
@@ -392,24 +261,14 @@ app.delete("/borrows/:id", verifyToken, async (req, res) => {
       return res.status(403).send({ message: "Forbidden" });
     }
 
-    const deleteResult = await borrowsCollection.deleteOne({ _id: new ObjectId(id) });
+    await booksCollection.updateOne(
+      { _id: new ObjectId(borrow.bookId) },
+      { $inc: { availableCopies: 1 } }
+    );
 
-    if (deleteResult.deletedCount > 0) {
-      if (borrow.bookId && ObjectId.isValid(borrow.bookId)) {
-        await booksCollection.updateOne(
-          { _id: new ObjectId(borrow.bookId) },
-          { $inc: { availableCopies: 1 } }
-        );
-      }
-    }
-
-    res.send({
-      success: true,
-      message: "Book returned successfully",
-      deletedCount: deleteResult.deletedCount,
-    });
+    const result = await borrowsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.send(result);
   } catch (error) {
-    console.error("Failed to return book:", error);
     res.status(500).send({ message: "Failed to return book" });
   }
 });
