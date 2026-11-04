@@ -48,7 +48,7 @@ cp .env.example .env
 | `MONGODB_URI` | MongoDB connection string (Atlas or local) | `mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority` |
 | `MONGODB_DB_NAME` | MongoDB database name | `booknook` |
 
-> **CORS Configuration:** `index.js` splits `CLIENT_URL` by commas and strips trailing slashes, allowing simultaneous local testing (`http://localhost:3000`) and production traffic from the deployed Vercel frontend (`https://booknook-client-roan.vercel.app`).
+> **CORS Configuration:** `cors()` middleware is configured to handle cross-origin requests, preflight OPTIONS checks, and authorization headers from both local testing (`http://localhost:3000`) and the deployed production frontend (`https://booknook-client-roan.vercel.app`).
 
 ### 3. Run Locally
 
